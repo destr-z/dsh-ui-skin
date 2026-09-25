@@ -176,19 +176,24 @@ function registerAssetRoutes(ctx: HostContext, getConfiguredDir: () => unknown):
       res.end(hit.reason)
       return
     }
-    res.statusCode = 200
-    res.setHeader('content-type', hit.contentType)
-    // 单张图的内容不会变（名字固定）——让它长缓存，省掉重复读取
-    res.setHeader('cache-control', 'public, max-age=86400')
     // ⚠️ 不要用 `res.pipe(openAsset(...))`：实测在 0.1.7 的 webServer 上，响应头虽已
     // 按命中设置（content-type / cache-control），body 却写不进去，客户端收到的是
     // **400 空响应** → 位图全部走 onError 回退。位图素材很小（白名单里最大 ~1MB），
     // 直接读进内存再 end() 最稳，也摆脱了对响应对象形态的依赖。
+    //
+    // ⚠️ 响应头一律在**读成功之后**才设：先设长缓存再失败，会让浏览器把那个失败响应
+    // 缓存 24 小时（踩过：服务端修好了，客户端仍在用缓存的 400）。
     try {
-      res.end(await readFile(hit.path))
+      const body = await readFile(hit.path)
+      res.statusCode = 200
+      res.setHeader('content-type', hit.contentType)
+      // 单张图的内容不会变（名字固定）——让它长缓存，省掉重复读取
+      res.setHeader('cache-control', 'public, max-age=86400')
+      res.end(body)
     } catch (error) {
       res.statusCode = 404
       res.setHeader('content-type', 'text/plain; charset=utf-8')
+      res.setHeader('cache-control', 'no-store')
       res.end(`cannot read asset: ${String(error)}`)
     }
   }
