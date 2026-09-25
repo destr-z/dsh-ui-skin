@@ -17,6 +17,8 @@
 
 import z from '@deepseek-ai/schemastery'
 
+import { readFile } from 'node:fs/promises'
+
 import { DEFAULT_SKIN, SKIN_IDS, type SkinId } from './skin-settings.ts'
 
 /** 本插件资产路由的挂载前缀。 */
@@ -39,7 +41,6 @@ import {
   SKIN_ASSET_NAMES,
   describeAssetsDir,
   lookupAsset,
-  openAsset,
 } from './asset-serve.ts'
 
 /** 本插件设置的值形状（Config 校验并填默认值后的有效值）。 */
@@ -179,12 +180,17 @@ function registerAssetRoutes(ctx: HostContext, getConfiguredDir: () => unknown):
     res.setHeader('content-type', hit.contentType)
     // 单张图的内容不会变（名字固定）——让它长缓存，省掉重复读取
     res.setHeader('cache-control', 'public, max-age=86400')
-    if (typeof res.pipe === 'function') {
-      res.once('close', () => { /* 客户端断开，读流会自行结束 */ })
-      res.pipe(openAsset(hit.path))
-      return
+    // ⚠️ 不要用 `res.pipe(openAsset(...))`：实测在 0.1.7 的 webServer 上，响应头虽已
+    // 按命中设置（content-type / cache-control），body 却写不进去，客户端收到的是
+    // **400 空响应** → 位图全部走 onError 回退。位图素材很小（白名单里最大 ~1MB），
+    // 直接读进内存再 end() 最稳，也摆脱了对响应对象形态的依赖。
+    try {
+      res.end(await readFile(hit.path))
+    } catch (error) {
+      res.statusCode = 404
+      res.setHeader('content-type', 'text/plain; charset=utf-8')
+      res.end(`cannot read asset: ${String(error)}`)
     }
-    res.end()
   }
 
   ctx.effect(() => server.register({ kind: 'prefix', path: ROUTE_PREFIX, handler }), 'ui-skin: asset route')
