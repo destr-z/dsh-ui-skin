@@ -45,7 +45,7 @@ export type { SkinId, SkinSettings } from '../skin-settings.ts'
 export type { SkinDefinition } from '../skins.ts'
 export {
   DEFAULT_SKIN, isSkinId, SKIN_ATTRIBUTE, SKIN_ENTRY_ID, SKIN_FIELD, SKIN_IDS,
-  SKIN_SETTINGS_NAMESPACE, SKIN_STORAGE_KEY,
+  SKIN_STORAGE_KEY,
 } from '../skin-settings.ts'
 export { SKINS, skinById } from '../skins.ts'
 export { ASSETS_URL_PREFIX, assetUrl, type SkinAssetManifest } from './assets.ts'
