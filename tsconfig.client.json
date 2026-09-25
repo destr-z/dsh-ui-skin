@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "types": ["node"],
+
+    /* client 半边**不由 tsc 产出**：tsc 不会写 window.__ModuleLoader__ 包装，
+       产物在浏览器里加载不了。这里只做类型检查，真正的打包交给 tsdown。 */
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+
+    "declaration": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/client/**/*.ts", "src/client/**/*.tsx", "src/shared/**/*.ts", "src/*.d.ts"]
+}
