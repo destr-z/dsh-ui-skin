@@ -2,7 +2,8 @@
  * 浏览器半边：皮肤服务。
  *
  * 皮肤是叠在「浅色/深色/跟随系统」之上的**表现层**：
- *   · 选中的皮肤 id 存 localStorage（跨标签页实时同步）；
+ *   · 选中的皮肤 id 存在**设置**里（跟随 profile，可导出/多端一致）；另存一份
+ *     localStorage 镜像只为首屏不闪，跨标签页同步由设置镜像负责；
  *   · 皮肤层通过 `ThemeRuntime.overrideTokens` 叠加（主题仍是明暗的唯一主人，
  *     换皮肤不动明暗偏好，换明暗则同一皮肤层按新模式重新合成）；
  *   · `body[data-dsh-ui-skin]` 发布当前皮肤（本插件自己的属性名，不与树内皮肤共用）；
@@ -29,12 +30,12 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { SkinRow, type SkinRowInjected } from './SkinRow.tsx'
 import { createSkinRowStore, type SkinRowStore } from './skin-row-store.ts'
-import { makeUseStoreHook } from './store.ts'
+import { createStore, makeUseStoreHook } from './store.ts'
 import { en, zh, type SkinKey } from './locales.ts'
 import { assetUrl, fetchAssetManifest, hasAsset } from './assets.ts'
 import {
   ASSETS_DIR_FIELD, DEFAULT_SKIN, isSkinId, SKIN_ATTRIBUTE, SKIN_ENTRY_ID,
-  SKIN_STORAGE_KEY, type SkinId,
+  SKIN_FIELD, SKIN_STORAGE_KEY, type SkinId,
 } from '../skin-settings.ts'
 import { skinById } from '../skins.ts'
 
@@ -122,6 +123,11 @@ interface SettingsScopeSnapshot {
   status: 'loading' | 'ready' | 'unavailable'
   /** 最近一次被接受的分段值；首次接受前是 undefined。 */
   value: unknown
+  /**
+   * 宿主文档里的**用户层**原始值（没有覆盖时为空）。
+   * 用来区分"用户选过"与"只是 schema 默认值"：只有前者才应当覆盖本地镜像。
+   */
+  user?: unknown
   /** 宿主文档是否接受写入。 */
   writable: boolean
 }
@@ -149,26 +155,17 @@ interface ClientContext {
   provide?: (name: string, value: unknown) => void
 }
 
-/** 从 localStorage 读皮肤 id，收窄成合法值。 */
-function readStoredSkin(): SkinId {
-  if (typeof localStorage === 'undefined') return DEFAULT_SKIN
-  try {
-    const value = localStorage.getItem(SKIN_STORAGE_KEY)
-    return isSkinId(value) ? value : DEFAULT_SKIN
-  } catch {
-    return DEFAULT_SKIN
-  }
+/**
+ * 把一个跨边界的值收窄成合法皮肤 id。
+ * @param value - 来自设置快照或本地镜像的值。
+ * @returns 合法 id；否则 undefined（由调用方决定回落什么）。
+ */
+function narrowSkin(value: unknown): SkinId | undefined {
+  return isSkinId(value) ? value : undefined
 }
 
-/** 持久化皮肤 id（尽力而为：存储不可用时留在进程内）。 */
-function writeStoredSkin(id: SkinId): void {
-  if (typeof localStorage === 'undefined') return
-  try {
-    localStorage.setItem(SKIN_STORAGE_KEY, id)
-  } catch {
-    /* 存储不可用 */
-  }
-}
+/** 写入皮肤 id：同时更新本地镜像与设置（由 apply 注入，见那边的注释）。 */
+type PersistSkin = (id: SkinId) => void
 
 /** 把皮肤 id 发布到 body 上（品牌面 CSS 的选举依据）。 */
 function applyBodyAttribute(id: SkinId): void {
@@ -181,37 +178,33 @@ export class SkinRuntime {
   private readonly ctx: ClientContext
   private readonly theme: ThemeRuntime
   private readonly store: SkinRowStore
+  private readonly persist: PersistSkin
   private id: SkinId
   private revision = 0
   private snapshot: SkinSnapshot
   private disposer: (() => void) | undefined
 
   /**
-   * @param ctx - 所属上下文（change 事件在它上面发出；storage 监听经 effect 释放）。
+   * @param ctx - 所属上下文（change 事件在它上面发出）。
    * @param theme - 承载皮肤覆盖层的主题服务。
    * @param store - 设置行的 store（记录素材清单状态）。
+   * @param options - 初始 id（来自本地镜像）与写入持久化的回调。
    */
-  constructor(ctx: ClientContext, theme: ThemeRuntime, store: SkinRowStore) {
+  constructor(
+    ctx: ClientContext,
+    theme: ThemeRuntime,
+    store: SkinRowStore,
+    options: { initial: SkinId; persist: PersistSkin },
+  ) {
     this.ctx = ctx
     this.theme = theme
     this.store = store
-    this.id = readStoredSkin()
+    this.persist = options.persist
+    this.id = options.initial
     this.snapshot = Object.freeze({ id: this.id, revision: this.revision })
     this.applyLayer(this.id)
-    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-      const onStorage = (event: StorageEvent): void => {
-        if (event.key !== SKIN_STORAGE_KEY) return
-        const next = isSkinId(event.newValue) ? event.newValue : DEFAULT_SKIN
-        if (next !== this.id) this.adopt(next)
-      }
-      // 跨标签页同步只是锦上添花：拿不到 addEventListener 就安静跳过。
-      // 注意不能用 `typeof window === 'undefined'` 当唯一判据 —— 某些外壳里
-      // window 存在但不完整，那时 effect 的同步执行会把整个插件加载带崩。
-      ctx.effect?.(() => {
-        window.addEventListener('storage', onStorage)
-        return () => { window.removeEventListener('storage', onStorage) }
-      }, 'ui-skin: cross-tab storage adoption')
-    }
+    // 跨标签页同步**不再靠 `storage` 事件**：皮肤 id 的权威值在设置里，而设置镜像
+    // 本身会把宿主文档的变更推给每个客户端（见 apply 里的 scope 订阅）。
   }
 
   /**
@@ -229,11 +222,20 @@ export class SkinRuntime {
   setSkin(id: SkinId): void {
     if (!isSkinId(id)) throw new Error(`skin "${String(id)}" is not a built-in skin`)
     if (this.id === id) return
-    writeStoredSkin(id)
+    this.persist(id) // 本地镜像 + 设置一起写
     this.adopt(id)
   }
 
-  /** 采纳一个已持久化的 id（storage 事件），不写回。 */
+  /**
+   * 采纳设置里的权威值（**不写回**，避免与设置形成写回环）。
+   * 其他标签页改了皮肤时，设置镜像会把新值推到这里，跨标签页同步即由此完成。
+   * @param id - 设置快照里的皮肤 id。
+   */
+  adoptFromSettings(id: SkinId): void {
+    if (this.id !== id) this.adopt(id)
+  }
+
+  /** 采纳一个已持久化的 id，不写回。 */
   private adopt(id: SkinId): void {
     this.id = id
     this.applyLayer(id)
@@ -266,17 +268,27 @@ export const inject = ['slots', 'locale', 'theme', 'configForms']
  */
 export function apply(ctx: ClientContext): void {
   const store = createSkinRowStore()
-  const skin = new SkinRuntime(ctx, ctx.theme as ThemeRuntime, store)
+
+  // ── 皮肤 id：设置是权威值，本地镜像是"首屏就有一张脸"的快照 ──
+  // 首屏设置快照还是 loading，所以先用镜像画；设置到齐后由下面的 scope 订阅采纳权威值。
+  let scope: SettingsScope | undefined
+  const mirror = createStore<{ skin: SkinId }>({ skin: DEFAULT_SKIN }, { persist: SKIN_STORAGE_KEY })
+  const skin = new SkinRuntime(ctx, ctx.theme as ThemeRuntime, store, {
+    initial: narrowSkin(mirror.get().skin) ?? DEFAULT_SKIN,
+    persist: (id) => {
+      mirror.set({ skin: id }) // 本地镜像（首屏用）
+      void scope?.set(SKIN_FIELD, id) // 权威值：跟随 profile；跨标签页由设置镜像同步
+    },
+  })
   // 服务名仍用 uiSkin（0.1.7 已移除树内皮肤包，`skin` 这个名字空出来了，但
   // 改名没有必要，也会让既有引用失效）。
   ctx.provide?.('uiSkin', skin)
 
   ctx.effect?.(() => { ctx.locale?.register(SETTINGS_NS, { zh, en }) }, 'ui-skin: settings row dictionaries')
 
-  // ── 素材目录：读设置（宿主半边读同一个键，决定从哪个目录服务图片）──
+  // ── 设置：素材目录与皮肤 id 都从这一个 scope 读 ──
   // 契约要点：读走 `getSnapshot().value`（不是 `get()`），写走 `set(字段, 值)`
-  // （不是 `set(整段对象)`）。值在首次同步前是 undefined，当作"用默认目录"。
-  let scope: SettingsScope | undefined
+  // （不是 `set(整段对象)`）。值在首次同步前是 undefined。
 
   /** 从 scope 快照里取出 assetsDir（去空白；非字符串一律当空）。 */
   const dirFromSnapshot = (snapshot: SettingsScopeSnapshot | undefined): string => {
@@ -287,19 +299,36 @@ export function apply(ctx: ClientContext): void {
     return typeof raw === 'string' ? raw.trim() : ''
   }
 
+  /** 设置里**用户显式写过**的皮肤 id（区别于 schema 默认值）。 */
+  const userSkin = (snapshot: SettingsScopeSnapshot | undefined): SkinId | undefined => {
+    const user = snapshot?.user
+    if (user === null || typeof user !== 'object') return undefined
+    return narrowSkin((user as Record<string, unknown>)[SKIN_FIELD])
+  }
+
   const syncDir = (): string => {
     const dir = dirFromSnapshot(scope?.getSnapshot())
     store.set({ assetsDir: dir })
     return dir
   }
 
+  const syncSkin = (): void => {
+    // 只采纳"用户层有值"的情况：否则设置里的 schema 默认值会把用户眼前的皮肤改掉
+    // （首屏来自镜像，那是更贴近用户上一次选择的值）。
+    // ⚠️ 若将来要先发布"皮肤存在 localStorage"的版本、再升级到本版，这里必须补一次
+    //    "把镜像值收养进设置"的写入；当前 ui-skin 从未发布，无需收养。
+    const id = userSkin(scope?.getSnapshot())
+    if (id !== undefined) skin.adoptFromSettings(id)
+  }
+
   ctx.effect?.(() => {
     scope = ctx.configForms?.get(SKIN_ENTRY_ID)
     if (scope === undefined) return () => { }
-    const stop = scope.subscribe(() => { syncDir() })
+    const stop = scope.subscribe(() => { syncDir(); syncSkin() })
     syncDir()
+    syncSkin()
     return () => { stop(); scope = undefined }
-  }, 'ui-skin: assetsDir scope')
+  }, 'ui-skin: settings scope')
 
   /** 写入素材目录：空串 = 清掉字段（回到默认目录）。 */
   const writeDir = (dir: string): void => {
