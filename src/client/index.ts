@@ -13,12 +13,11 @@
  *     `ctx.settingsScope.bind({ namespace })`）读写 —— 宿主半边读同一个
  *     设置来决定从哪个目录服务图片。
  *
- * 与树内那份的区别（外部插件形态）：
- *   1. 去掉启动期注入（boot script）—— 外部插件在首屏后才挂载，本版不做；
- *   2. 去掉对 `dsh-client-store` / `ui-primitives` 的依赖（两者都不在装载器的
- *      基线模块表里，用它们就得再声明 external 供给方），改用包内的极小 store
- *      与自带的鲸鱼矢量图；
- *   3. 位图素材改从 `/dsh-ui-skin/assets/` 读，且**先问清单**再决定用哪几张，
+ * 实现要点：
+ *   1. 只在浏览器半边做皮肤 —— 外部插件在首屏后才挂载，所以不做启动期注入；
+ *   2. 状态用官方 `@deepseek-ai/dsh-client-store`（0.1.7 起它在装载器的基线模块
+ *      表里，见 tsdown.config.ts 的说明）；标记用自带的矢量图，不引额外装配依赖；
+ *   3. 位图素材从 `/dsh-ui-skin/assets/` 读，且**先问清单**再决定用哪几张，
  *      缺图直接渲染矢量标记（一个失败请求都不发）。
  */
 import type { Context } from '@deepseek-ai/cordis'
