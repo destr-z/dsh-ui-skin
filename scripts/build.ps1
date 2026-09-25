@@ -101,6 +101,15 @@ if (Test-Path (Join-Path $slotsPkg 'lib\types')) {
   Write-Host '  ⚠ 找不到 ui-slots 的 lib/types —— client 类型检查会缺 slots 的类型' -ForegroundColor Yellow
 }
 
+# 官方客户端 store（0.1.7 起在基线模块表里，见 tsdown.config.ts 的说明）：
+# 客户端半边要 require 它、客户端类型检查要解析它的 d.ts，同样链上源码包。
+$storePkg = Join-Path $Checkout 'packages\client\store'
+if (Test-Path (Join-Path $storePkg 'lib\types')) {
+  New-Junction 'node_modules\@deepseek-ai\dsh-client-store' $storePkg
+} else {
+  Write-Host '  ⚠ 找不到 dsh-client-store 的 lib/types —— client 类型检查会缺它的类型' -ForegroundColor Yellow
+}
+
 # ── 1) host 半边：tsc 真正产出 lib/index.js + lib/types ───────────────────
 Write-Host '=== 编译 host 半边：src → lib ===' -ForegroundColor Cyan
 & $Tsc -p tsconfig.json

@@ -4,16 +4,21 @@ import type { UserConfig } from 'tsdown'
 const PLUGIN_ID = '@dsh-external/dsh-ui-skin'
 
 /**
- * 由宿主浏览器运行时提供的模块，不能打进包里：React 与 cordis。
+ * 由宿主浏览器运行时提供、不能打进包里的模块。
  *
  * 装载器给工厂的 `require` 只认「基线模块表 → 已物化记录 → boot graph 行 →
- * 已注册工厂」；基线表里就是 React / ReactDOM / cordis 这些。所以客户端半边
- * 刻意**不 require 任何 @deepseek-ai 包**：
- *   · 服务（slots / locale / theme / settingsScope）经 `inject` 由宿主注入，
- *     不经过 require；
- *   · 类型 import 在编译期被抹掉；
- *   · 原本要用的 dsh-client-store / ui-primitives 换成包内实现（见 client/store.ts
- *     与 client/marks/WhaleGirlMark.tsx），免得为一条依赖去声明 external 供给方。
+ * 已注册工厂」。**0.1.7 的基线模块表**（packages/client/web/src/seed.ts）里有：
+ *   react、react/jsx-runtime、react-dom、react-dom/client、@deepseek-ai/cordis、
+ *   dsh-client-store、dsh-client-ui-slots、dsh-client-ui-primitives、dsh-client-ui-dockkit。
+ *
+ * 所以客户端半边的规矩是：
+ *   · 服务（slots / locale / theme / configForms）经插件 `inject` 由宿主注入；
+ *   · 基线表里的**库**（例如 dsh-client-store）走 `require`，并在 package.json 的
+ *     `dsh.client.external` 里声明 —— 静态表名不产生图边，零装配风险；
+ *   · 类型 import 在编译期被抹掉。
+ *
+ * （0.1.5 时代 dsh-client-store / ui-primitives 都不在基线表里，所以当时改成了包内
+ * 实现；0.1.7 它们都进表了，那条限制不再成立。）
  */
 const CLIENT_EXTERNALS = [
   'react',
@@ -21,6 +26,7 @@ const CLIENT_EXTERNALS = [
   'react-dom',
   'react-dom/client',
   'cordis',
+  '@deepseek-ai/dsh-client-store',
 ]
 
 /**

@@ -1,14 +1,23 @@
 /**
  * 皮肤设置行的状态容器，以及给组件用的 React 选择器钩子。
  *
- * ## 为什么不用 `@deepseek-ai/dsh-client-store`
+ * ## 引擎用官方的 `@deepseek-ai/dsh-client-store`
  *
- * 客户端槽位的"store 席位"（`PropsStore`）要求传入那个包的 `StoreHandle` 形状
- * （带 `create()` / `decl` 的完整引擎）。而 `dsh-client-store` **不在装载器的
- * 基线模块表里** —— 用它就得再声明一条 `dsh.client.external` 依赖并指定供给方，
- * 为几行状态代码引入装配风险不划算。所以这里用 40 行本地容器 + React 自带的
- * `useSyncExternalStore`（React 是基线模块，安全）。
+ * 0.1.5 时代这个包**不在装载器的基线模块表里**：用它就得额外声明 `dsh.client.external`
+ * 并指望有供给方，为几行状态代码引入装配风险不划算，所以当时用了本地 40 行容器。
+ *
+ * **0.1.7 它已经在基线表里**（`packages/client/web/src/seed.ts`），而且 `dsh.client.external`
+ * 对静态表名不产生图边（`packages/client/modules/src/index.ts`：external 要么是包行、
+ * 要么是静态表名）—— 装配风险为零。所以现在直接用官方 `createSnapshotStore`：
+ *   · 顺带拿到 **`persist`**（localStorage 持久化，皮肤 id 的首屏镜像要用它）；
+ *   · 状态引擎（zustand + immer）与官方插件一致，不再是"另一套"。
+ *
+ * 本地只保留官方没有的两点便利：`set(patch)` 的**浅比较短路**（无变化不发通知）与
+ * `makeUseStoreHook`（把 store 变成组件渲染期可调用的选择器钩子）。组件只依赖
+ * `get` / `subscribe`，所以换引擎对它们透明。
  */
+
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 
 /** 一个可订阅的只读快照容器。 */
 export interface Store<T> {
@@ -24,33 +33,32 @@ export interface Store<T> {
 }
 
 /**
- * 创建一个 store。
+ * 创建一个 store（官方引擎 + 本地便利层）。
  * @param initial - 初始状态。
+ * @param options - 给了 `persist` 就用它作 localStorage 键持久化整个快照。
  * @returns store 句柄。
  */
-export function createStore<T extends object>(initial: T): Store<T> {
-  let snapshot: T = Object.freeze({ ...initial })
-  const listeners = new Set<() => void>()
+export function createStore<T extends object>(
+  initial: T,
+  options?: { persist?: string },
+): Store<T> {
+  const store = options?.persist === undefined
+    ? createSnapshotStore<T>(initial)
+    : createSnapshotStore<T>(initial, { persist: { name: options.persist } })
 
-  const get = (): T => snapshot
-
-  const subscribe = (listener: () => void): (() => void) => {
-    listeners.add(listener)
-    return () => { listeners.delete(listener) }
+  return {
+    get: () => store.getSnapshot(),
+    subscribe: store.subscribe,
+    set: (patch) => {
+      const current = store.getSnapshot()
+      // 浅比较短路：官方 store 的 set/update 总是通知，这里保留旧语义，
+      // 避免同值写入触发整行重渲染。
+      const changed = (Object.keys(patch) as (keyof T)[])
+        .some(key => patch[key] !== current[key])
+      if (!changed) return
+      store.update((draft) => { Object.assign(draft, patch) })
+    },
   }
-
-  const set = (patch: Partial<T>): void => {
-    let changed = false
-    for (const key of Object.keys(patch) as (keyof T)[]) {
-      if (patch[key] !== snapshot[key]) { changed = true; break }
-    }
-    if (!changed) return
-    snapshot = Object.freeze({ ...snapshot, ...patch })
-    // 复制一份再遍历：监听器内部可能退订，直接遍历原集合会漏/跳
-    for (const listener of [...listeners]) listener()
-  }
-
-  return { get, subscribe, set }
 }
 
 /** 选择器钩子的形状。 */

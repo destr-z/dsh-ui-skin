@@ -48,6 +48,9 @@
         "@deepseek-ai/dsh-client-ui-settings-general",
         "@deepseek-ai/dsh-client-ui-theme"
       ],
+      "external": [
+        "@deepseek-ai/dsh-client-store"
+      ],
       "platform": "web"
     }
   }
