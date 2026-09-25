@@ -102,6 +102,8 @@ try {
     env,
     stdio: ['ignore', openSync(logOut, 'a'), openSync(logErr, 'a')],
     windowsHide: true,
+    // .cmd/.bat wrappers cannot be spawned on Windows without a shell (EINVAL).
+    shell: /\.(cmd|bat)$/i.test(exe),
   })
   let url = null
   const deadline = Date.now() + 90_000

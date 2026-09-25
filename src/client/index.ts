@@ -241,10 +241,19 @@ export class SkinRuntime {
     this.publish()
   }
 
-  /** 重新叠加覆盖层，并刷新 body 属性。 */
+  /** 重新叠加覆盖层，并刷新 body 属性。
+   *
+   * 顺序：**先叠新层，再撤旧层**。反过来（先 dispose 再 apply）会有一瞬没有任何
+   * 皮肤 token，整屏闪一下 —— 切换皮肤时肉眼可见。
+   *
+   * 这样写是安全的，因为 `ThemeRuntime.overrideTokens` 按 source 记账（一个 source
+   * 只有一层，重复调用即替换），并且**被替换后旧 disposer 自动变成 no-op**
+   * （见 ui-theme 的 `overrideTokens` 文档）；所以既没有空档，也不会留下旧层。
+   */
   private applyLayer(id: SkinId): void {
-    this.disposer?.()
+    const previous = this.disposer
     this.disposer = this.theme.overrideTokens('dsh-ui-skin', skinById(id).tokens)
+    previous?.()
     applyBodyAttribute(id)
   }
 
